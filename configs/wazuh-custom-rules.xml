@@ -1,0 +1,156 @@
+<!--
+  Wazuh Custom Detection Rules — KShield Homelab
+  Active Directory + Endpoint Monitoring
+  Rule IDs: 100001–100020 (custom range starts at 100000)
+-->
+
+<group name="kshield_homelab,active_directory,">
+
+  <!-- ============================================================ -->
+  <!-- AUTHENTICATION MONITORING                                     -->
+  <!-- ============================================================ -->
+
+  <!-- Brute force detection — extends Wazuh built-in rule 60204            -->
+  <!-- 60122 = single failed logon (4625 base rule)                         -->
+  <!-- 60204 = built-in Wazuh correlation rule: multiple Windows logon fails -->
+  <!-- Our rule adds MITRE tagging and raises severity for AD environments   -->
+  <rule id="100001" level="12" overwrite="no">
+    <if_sid>60204</if_sid>
+    <description>AD brute force — multiple Windows logon failures detected (extends rule 60204)</description>
+    <mitre>
+      <id>T1110</id>
+    </mitre>
+    <group>authentication_failures,brute_force,</group>
+  </rule>
+
+  <!-- Credential stuffing indicator — fires when our brute force rule (100001) -->
+  <!-- has already fired, signaling sustained attack activity                    -->
+  <rule id="100002" level="14">
+    <if_matched_sid>100001</if_matched_sid>
+    <description>Sustained brute force activity on AD — possible credential stuffing (T1110)</description>
+    <mitre>
+      <id>T1110</id>
+      <id>T1078</id>
+    </mitre>
+    <group>authentication_failures,brute_force,</group>
+  </rule>
+
+  <!-- Login from unexpected workstation -->
+  <rule id="100003" level="8">
+    <if_sid>60106</if_sid>
+    <field name="win.eventdata.logonType">^3$</field>
+    <description>Remote network logon detected (Logon Type 3) — possible lateral movement</description>
+    <mitre>
+      <id>T1021</id>
+    </mitre>
+    <group>lateral_movement,authentication_success,</group>
+  </rule>
+
+  <!-- ============================================================ -->
+  <!-- PRIVILEGE ESCALATION                                         -->
+  <!-- ============================================================ -->
+
+  <!-- User added to privileged group -->
+  <!-- Parent SID 60155 = Wazuh built-in rule for group membership change (4728/4732) -->
+  <rule id="100004" level="10">
+    <if_sid>60155</if_sid>
+    <description>User added to security-enabled group (Event ID 4728/4732) — possible privilege escalation</description>
+    <mitre>
+      <id>T1078.002</id>
+    </mitre>
+    <group>privilege_escalation,account_changes,</group>
+  </rule>
+
+  <!-- New user account created -->
+  <rule id="100005" level="8">
+    <if_sid>60151</if_sid>
+    <description>New user account created (Event ID 4720) — verify if authorized</description>
+    <mitre>
+      <id>T1136.001</id>
+    </mitre>
+    <group>account_changes,</group>
+  </rule>
+
+  <!-- ============================================================ -->
+  <!-- KERBEROS MONITORING                                          -->
+  <!-- ============================================================ -->
+
+  <!-- Kerberoasting indicator — RC4 encryption in TGS request (Event ID 4769) -->
+  <!-- Uses win.system.eventID field since no default Wazuh rule covers 4769 RC4 specifically -->
+  <rule id="100006" level="12">
+    <if_group>windows</if_group>
+    <field name="win.system.eventID">^4769$</field>
+    <field name="win.eventdata.ticketEncryptionType">^0x17$</field>
+    <description>Kerberos TGS request using RC4 encryption — possible Kerberoasting (T1558.003)</description>
+    <mitre>
+      <id>T1558.003</id>
+    </mitre>
+    <group>kerberoasting,credential_access,</group>
+  </rule>
+
+  <!-- Kerberos pre-authentication failure (Event ID 4771) -->
+  <rule id="100007" level="8" frequency="5" timeframe="60">
+    <if_group>windows</if_group>
+    <field name="win.system.eventID">^4771$</field>
+    <description>Multiple Kerberos pre-authentication failures (Event ID 4771) — possible password spray</description>
+    <mitre>
+      <id>T1110.003</id>
+    </mitre>
+    <group>kerberos,authentication_failures,</group>
+  </rule>
+
+  <!-- ============================================================ -->
+  <!-- ENDPOINT — SYSMON BASED                                      -->
+  <!-- ============================================================ -->
+
+  <!-- Suspicious PowerShell with encoded command -->
+  <rule id="100008" level="12">
+    <if_group>sysmon_event1</if_group>
+    <field name="win.eventdata.commandLine" type="pcre2">(?i)(encodedcommand|-enc\s|frombase64)</field>
+    <description>PowerShell encoded command detected — possible obfuscated execution (T1059.001)</description>
+    <mitre>
+      <id>T1059.001</id>
+      <id>T1027</id>
+    </mitre>
+    <group>powershell,execution,</group>
+  </rule>
+
+  <!-- Executable dropped in Temp directory -->
+  <rule id="100009" level="10">
+    <if_group>sysmon_event11</if_group>
+    <field name="win.eventdata.targetFilename" type="pcre2">(?i)(\\temp\\|\\appdata\\local\\temp\\).*\.(exe|dll|bat|ps1)$</field>
+    <description>Executable file created in Temp directory — possible malware staging (T1204)</description>
+    <mitre>
+      <id>T1204</id>
+      <id>T1027.002</id>
+    </mitre>
+    <group>malware,file_creation,</group>
+  </rule>
+
+  <!-- Registry persistence key modified -->
+  <rule id="100010" level="10">
+    <if_group>sysmon_event13</if_group>
+    <field name="win.eventdata.targetObject" type="pcre2">(?i)CurrentVersion\\Run</field>
+    <description>Registry Run key modified — possible persistence mechanism (T1547.001)</description>
+    <mitre>
+      <id>T1547.001</id>
+    </mitre>
+    <group>persistence,registry,</group>
+  </rule>
+
+  <!-- ============================================================ -->
+  <!-- MALWARE DETECTION — VIRUSTOTAL INTEGRATION                   -->
+  <!-- ============================================================ -->
+
+  <!-- VirusTotal malicious file detection -->
+  <rule id="100011" level="15">
+    <if_sid>657</if_sid>
+    <field name="virustotal.malicious">^[^0]</field>
+    <description>VirusTotal: Malicious file detected — $(virustotal.malicious) engine(s) flagged file</description>
+    <mitre>
+      <id>T1204</id>
+    </mitre>
+    <group>virustotal,malware,</group>
+  </rule>
+
+</group>

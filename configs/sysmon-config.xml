@@ -1,0 +1,71 @@
+<Sysmon schemaversion="4.70">
+  <!-- KShield Homelab — Sysmon Configuration -->
+  <!-- Based on SwiftOnSecurity community config, trimmed for lab use -->
+
+  <HashAlgorithms>SHA256</HashAlgorithms>
+  <CheckRevocation>False</CheckRevocation>
+
+  <EventFiltering>
+
+    <!-- Event ID 1 — Process Creation -->
+    <RuleGroup name="ProcessCreate" groupRelation="or">
+      <ProcessCreate onmatch="exclude">
+        <!-- Exclude known noisy system processes -->
+        <Image condition="is">C:\Windows\System32\conhost.exe</Image>
+        <Image condition="is">C:\Windows\System32\wbem\WmiPrvSE.exe</Image>
+      </ProcessCreate>
+    </RuleGroup>
+
+    <!-- Event ID 3 — Network Connection -->
+    <RuleGroup name="NetworkConnect" groupRelation="or">
+      <NetworkConnect onmatch="include">
+        <!-- Monitor outbound connections from suspicious processes -->
+        <Image condition="contains">powershell</Image>
+        <Image condition="contains">cmd</Image>
+        <Image condition="contains">wscript</Image>
+        <Image condition="contains">cscript</Image>
+        <Image condition="contains">mshta</Image>
+      </NetworkConnect>
+    </RuleGroup>
+
+    <!-- Event ID 7 — Image Load -->
+    <RuleGroup name="ImageLoad" groupRelation="or">
+      <ImageLoad onmatch="include">
+        <!-- Monitor DLL loads from temp/user directories -->
+        <ImageLoaded condition="contains">\Temp\</ImageLoaded>
+        <ImageLoaded condition="contains">\AppData\</ImageLoaded>
+      </ImageLoad>
+    </RuleGroup>
+
+    <!-- Event ID 11 — File Create -->
+    <RuleGroup name="FileCreate" groupRelation="or">
+      <FileCreate onmatch="include">
+        <!-- Monitor executable drops in common staging paths -->
+        <TargetFilename condition="contains">\Temp\</TargetFilename>
+        <TargetFilename condition="endswith">.exe</TargetFilename>
+        <TargetFilename condition="endswith">.ps1</TargetFilename>
+        <TargetFilename condition="endswith">.bat</TargetFilename>
+      </FileCreate>
+    </RuleGroup>
+
+    <!-- Event ID 13 — Registry Value Set -->
+    <RuleGroup name="RegistryEvent" groupRelation="or">
+      <RegistryEvent onmatch="include">
+        <!-- Monitor common persistence registry keys -->
+        <TargetObject condition="contains">SOFTWARE\Microsoft\Windows\CurrentVersion\Run</TargetObject>
+        <TargetObject condition="contains">SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon</TargetObject>
+      </RegistryEvent>
+    </RuleGroup>
+
+    <!-- Event ID 22 — DNS Query -->
+    <RuleGroup name="DnsQuery" groupRelation="or">
+      <DnsQuery onmatch="exclude">
+        <!-- Exclude known legitimate DNS noise -->
+        <QueryName condition="endswith">.microsoft.com</QueryName>
+        <QueryName condition="endswith">.windows.com</QueryName>
+      </DnsQuery>
+    </RuleGroup>
+
+  </EventFiltering>
+
+</Sysmon>
