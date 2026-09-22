@@ -6,7 +6,7 @@
 # Purpose: Forward application logs from shared hosting
 #          (no root access) to Wazuh server via SSH/SCP
 #
-# Environment: Hostinger shared hosting → Wazuh (wazuh.mywire.org)
+# Environment: Hostinger shared hosting → Wazuh (wazuh.example.org)
 # Schedule: Cron job every 12 hours
 #
 # Cron entry (add via: crontab -e):
@@ -16,7 +16,7 @@
 # --- Configuration ---
 LOG_SOURCE="/home/deployment/logs/app.log"
 REMOTE_USER="deployment"
-REMOTE_HOST="wazuh.mywire.org"
+REMOTE_HOST="wazuh.example.org"
 REMOTE_PATH="/home/deployment/shared-logs/app.log"
 SSH_KEY="/home/deployment/.ssh/id_rsa"
 TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
