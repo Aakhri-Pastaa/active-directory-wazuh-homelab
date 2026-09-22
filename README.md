@@ -1,39 +1,31 @@
 # Active Directory + Wazuh Hybrid SOC Homelab
 
-> Azure-hosted Active Directory, Wazuh SIEM, Sysmon endpoint telemetry, and a custom agentless log pipeline — all running together as one environment.
+**A hybrid security-monitoring lab: an Azure-hosted Windows Server domain controller, a VirtualBox Windows 10 endpoint joined to it over the public internet, Sysmon endpoint telemetry, a remote Wazuh SIEM, an agentless SCP-and-cron log pipeline from a shared host, and VirusTotal hash lookups.**
 
-![Status](https://img.shields.io/badge/Status-Completed%20%2F%20Archived-lightgrey)
-![Platform](https://img.shields.io/badge/Platform-Azure%20%7C%20VirtualBox%20%7C%20Linux-blue)
-![SIEM](https://img.shields.io/badge/SIEM-Wazuh-orange)
-![Domain](https://img.shields.io/badge/Identity-Active%20Directory-0078D4?logo=microsoft)
-![License](https://img.shields.io/badge/License-MIT-lightgrey)
+> [!NOTE]
+> **Status: completed and archived.** I built the lab in early 2024 and documented it in 2025. The files in `configs/` and `scripts/` were reconstructed from memory and checked against the official documentation, not recovered from the original lab — see [Status and limitations](#status-and-limitations). How it was built: [AI disclosure](#ai-disclosure).
 
----
+## What it does
 
-## What This Is
+I wanted to understand how security monitoring works across distributed
+infrastructure, not just on one machine. So I set up an Azure-hosted Windows
+Server as the domain controller, joined a local VirtualBox Windows 10 VM to it
+over the public internet, and pointed everything at a remote Wazuh server.
+Then I hit a separate problem: a shared Hostinger server whose web-app logs I
+wanted to monitor, with no root access and therefore no Wazuh agent. I worked
+around it with SCP and cron.
 
-Most homelab guides are single-machine setups - one VM, one tool, done. This one is different.
-
-I wanted to understand how security monitoring actually works across distributed infrastructure, not just on a local box. So I set up an Azure-hosted Windows Server as the Domain Controller, joined a local VirtualBox Windows 10 VM to it over the public internet, and pointed everything at a remote Wazuh server. Then I hit a separate problem — I had a shared Hostinger server with web app logs I wanted to monitor but had no root access, so no Wazuh agent. I worked around it using SCP and cron.
-
-It ended up covering more ground than I planned — hybrid domain join, SIEM integration, endpoint telemetry with Sysmon, agentless log shipping, and VirusTotal-based malware detection. Not bad for something that started as just "let me try AD."
-
----
-
-## Honest Notes
-
-**On documentation:** Built this in early 2024, documented it in 2025. I wasn't keeping notes while building — I was too busy getting it to actually work. Everything here is reconstructed from memory and what I remembered going wrong.
-
-**On the config files:** The files in `configs/` and `scripts/` were rebuilt from memory, not recovered from the original lab. I verified each one against the official Wazuh docs, the Wazuh GitHub ruleset, and the Sysmon schema reference before putting them here. They're accurate to what I built — just reconstructed, not recovered. If you're using them, adjust the hostnames, paths, and API keys for your environment.
-
----
+It ended up covering more ground than I planned — hybrid domain join, SIEM
+integration, endpoint telemetry with Sysmon, agentless log shipping, and
+VirusTotal-based malware detection. Not bad for something that started as
+"let me try AD". It is a personal learning lab, not a production deployment.
 
 ## Architecture
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────┐
 │                    IDENTITY LAYER (Azure)                    │
-│   Windows Server DC  ←  mylab-local.mywire.org              │
+│   Windows Server DC  ←  dc.example.org                       │
 │   AD DS + DNS + Kerberos + Group Policy                      │
 └────────────────────────┬────────────────────────────────────┘
                          │ Domain Join (over public internet)
@@ -45,7 +37,7 @@ It ended up covering more ground than I planned — hybrid domain join, SIEM int
                          │ Wazuh Agent (port 1514)
 ┌────────────────────────▼────────────────────────────────────┐
 │                   SIEM LAYER (Remote)                        │
-│   Wazuh Server  ←  wazuh.mywire.org                         │
+│   Wazuh Server  ←  wazuh.example.org                         │
 │   Ingest → Decode → Match Rules → Alert                      │
 └────────────────────────┬────────────────────────────────────┘
                          │ SSH + Cron (every 12h)
@@ -56,32 +48,28 @@ It ended up covering more ground than I planned — hybrid domain join, SIEM int
 └─────────────────────────────────────────────────────────────┘
 ```
 
-Both the DC and the Wazuh server use Dynu dynamic DNS (`mywire.org`) so I didn't need static IPs — everything talks by hostname across networks.
+Both the DC and the Wazuh server used Dynu dynamic DNS, so neither needed a
+static IP — everything talks by hostname across networks. The hostnames in
+this repository are placeholders.
 
----
-
-## Components
-
-| Component | Technology | What It Does |
+| Component | Technology | What it does |
 |---|---|---|
 | Domain Controller | Windows Server on Azure | Identity authority — Kerberos, AD DS, DNS |
 | Endpoint | Windows 10 (VirtualBox) | Domain-joined machine, simulates user activity |
 | SIEM | Wazuh (manager + indexer) | Ingests logs, runs rules, generates alerts |
 | Telemetry | Sysmon | Deep endpoint logging — process, network, registry |
-| DNS | Dynu Dynamic DNS | Hostname resolution across cloud and local |
-| Log Forwarder | Bash + Cron + SCP | Agentless pipeline from shared hosting |
-| Threat Intel | VirusTotal API | File hash scanning, malware detection |
+| DNS | Dynu dynamic DNS | Hostname resolution across cloud and local |
+| Log forwarder | Bash + cron + SCP | Agentless pipeline from shared hosting |
+| Threat intel | VirusTotal API | File-hash lookups, malware detection |
 
----
+Data flow:
 
-## Data Flow
-
-```
+```text
 User or simulated attack activity
           ↓
 Windows Event Logs + Sysmon events fire
           ↓
-Wazuh Agent ships logs → port 1514 → wazuh.mywire.org
+Wazuh Agent ships logs → port 1514 → Wazuh manager
   (or SCP push every 12h from Hostinger)
           ↓
 Wazuh Manager decodes, normalizes, matches rules
@@ -91,15 +79,16 @@ Alert generated with severity level 1–15
 Dashboard — investigate, correlate, map to MITRE
 ```
 
----
+## Key parts of the build
 
-## Key Parts of the Build
+### 1. Hybrid domain join (Azure DC ↔ local VM)
 
-### 1. Hybrid Domain Join (Azure DC ↔ Local VM)
+Joining a local VM to an Azure-hosted domain does not work out of the box.
+The VM's DNS had to point directly at the Azure DC's IP, not the default
+gateway, and the Azure network security group needed these ports open before
+anything would function:
 
-Joining a local VM to an Azure-hosted domain doesn't just work out of the box. The VM's DNS had to point directly at the Azure DC's IP — not the default gateway. Then the Azure NSG needed these ports open before anything would function:
-
-```
+```text
 TCP/UDP 53   — DNS
 TCP/UDP 88   — Kerberos
 TCP 389      — LDAP
@@ -108,18 +97,19 @@ TCP 1514     — Wazuh agent traffic
 TCP 1515     — Wazuh agent registration
 ```
 
-After that, domain join worked. Validated with:
+After that, the domain join worked. Validated with:
 
 ```powershell
-nslookup mylab-local.mywire.org
+nslookup dc.example.org
 Test-ComputerSecureChannel -Verbose
 ```
 
----
-
 ### 2. Sysmon + Wazuh
 
-Default Sysmon without a proper config generates too much noise to be useful. I used the SwiftOnSecurity config as a base. The key thing most people miss — Wazuh doesn't automatically read the Sysmon channel. You have to explicitly add it:
+Default Sysmon without a proper config generates too much noise to be
+useful, so I used the SwiftOnSecurity config as a base. The step most people
+miss: Wazuh does not read the Sysmon channel automatically. You have to add
+it explicitly:
 
 ```xml
 <localfile>
@@ -128,11 +118,10 @@ Default Sysmon without a proper config generates too much noise to be useful. I 
 </localfile>
 ```
 
-Without that line, Sysmon runs fine but Wazuh sees nothing from it.
+Without that block, Sysmon runs fine but Wazuh sees nothing from it. Event
+IDs monitored:
 
-Event IDs being monitored:
-
-| Event ID | What It Captures |
+| Event ID | What it captures |
 |---|---|
 | 1 | Process creation — full command line, parent process |
 | 3 | Network connections — src/dst IP and port |
@@ -141,17 +130,17 @@ Event IDs being monitored:
 | 13 | Registry value set |
 | 22 | DNS queries |
 
----
+### 3. Agentless log pipeline
 
-### 3. Agentless Log Pipeline
-
-The Hostinger server had no root access so I couldn't install the Wazuh agent. I needed those web app logs in the SIEM anyway, so I wrote a cron job that pushes them via SCP every 12 hours:
+The Hostinger server had no root access, so I could not install the Wazuh
+agent. I needed those web-app logs in the SIEM anyway, so a cron job pushes
+them over SCP every 12 hours:
 
 ```bash
-0 */12 * * * scp /home/deployment/logs/app.log deployment@wazuh.mywire.org:/home/deployment/shared-logs/app.log
+0 */12 * * * scp /home/deployment/logs/app.log deployment@wazuh.example.org:/home/deployment/shared-logs/app.log
 ```
 
-Wazuh just watches that directory like any other log source:
+Wazuh watches that directory like any other log source:
 
 ```xml
 <localfile>
@@ -160,15 +149,17 @@ Wazuh just watches that directory like any other log source:
 </localfile>
 ```
 
-Same approach works for anything you can't install an agent on — IoT devices, legacy systems, restricted environments. The full script with error handling is in `scripts/log-forwarder.sh`.
+The same approach works for anything that cannot run an agent — IoT devices,
+legacy systems, restricted environments. The full script, with error
+handling, is `scripts/log-forwarder.sh`.
 
----
+### 4. VirusTotal integration
 
-### 4. VirusTotal Integration
+Every 12 hours a script scans the monitored directories recursively, hashes
+each file with SHA-256 and checks the hash against the VirusTotal API. The
+results are logged and picked up by Wazuh:
 
-Every 12 hours, a script recursively scans monitored directories, pulls SHA256 hashes, and checks them against the VirusTotal API. Results get logged and picked up by Wazuh:
-
-```
+```text
 Scan directories recursively
         ↓
 SHA256 hash per file
@@ -178,13 +169,15 @@ VirusTotal API lookup (hash check, not upload)
 Verdict logged → Wazuh ingests → rule fires if malicious
 ```
 
-This is hash-based lookup only — no files are uploaded to VT. Rate limiting (15s sleep between requests) keeps it within the free tier. Full script in `scripts/virustotal-scanner.sh`.
+It is a hash lookup only; no file is uploaded to VirusTotal. A 15-second
+sleep between requests keeps it within the free tier's rate limit. Full
+script: `scripts/virustotal-scanner.sh`.
 
----
+## Detection coverage
 
-## AD Monitoring Coverage
+Active Directory events:
 
-| Category | Event IDs | What It Catches |
+| Category | Event IDs | What it catches |
 |---|---|---|
 | Authentication | 4624, 4625, 4648 | Brute force, pass-the-hash, lateral movement |
 | Privilege changes | 4728, 4732, 4756 | Group membership changes |
@@ -192,11 +185,9 @@ This is hash-based lookup only — no files are uploaded to VT. Rate limiting (1
 | Kerberos | 4768, 4769, 4771 | TGT requests, service tickets, pre-auth failures |
 | Policy changes | 4739, 4713 | Domain policy modifications |
 
----
+MITRE ATT&CK mapping:
 
-## MITRE ATT&CK Coverage
-
-| Technique | ID | How It's Detected |
+| Technique | ID | How it is detected |
 |---|---|---|
 | Brute Force | T1110 | Multiple 4625s → Wazuh rule 60204 → custom rule 100001 |
 | Valid Accounts | T1078 | 4624 from unexpected source |
@@ -207,38 +198,63 @@ This is hash-based lookup only — no files are uploaded to VT. Rate limiting (1
 | Lateral Movement | T1021 | Remote logons from unexpected workstations |
 | Malware | T1204 | VirusTotal hash match → rule 100011 |
 
----
+The 11 custom rules (IDs 100001–100011) are in
+`configs/wazuh-custom-rules.xml`.
 
-## Troubleshooting — What Actually Went Wrong
+## What went wrong
 
-**Domain join failing — "DNS name does not exist"**
-The VM was resolving against the default gateway, not the DC. Fixed by manually setting the DNS adapter to the Azure DC's IP before attempting the join.
+**Domain join failing — "DNS name does not exist".** The VM was resolving
+against the default gateway, not the DC. Fixed by setting the DNS adapter to
+the Azure DC's IP manually before attempting the join.
 
-**Sysmon installed but nothing showing in Wazuh**
-Wazuh doesn't monitor the Sysmon event channel by default. Had to add the `<localfile>` block explicitly. This one took longer to figure out than it should have.
+**Sysmon installed, nothing in Wazuh.** Wazuh does not monitor the Sysmon
+event channel by default; the `<localfile>` block has to be added
+explicitly. This one took longer to figure out than it should have.
 
-**Agents connected, zero alerts**
-The pipeline was working fine — logs were flowing. But no rules were firing because I hadn't generated any test activity. Spent time thinking something was broken when it was actually working correctly. Lesson: always test with deliberate activity, don't assume silence means failure.
+**Agents connected, zero alerts.** The pipeline was working — logs were
+flowing — but no rules fired because I had not generated any test activity.
+I spent time thinking something was broken when it was working correctly.
+Lesson: test with deliberate activity; silence does not mean failure.
 
-**Kerberos failing intermittently**
-Time drift between the Azure DC and local VM. Kerberos won't authenticate if clocks are off by more than 5 minutes — and it fails silently. Fixed with `w32tm /resync`.
+**Kerberos failing intermittently.** Clock drift between the Azure DC and the
+local VM. Kerberos refuses to authenticate when clocks differ by more than
+five minutes, and it fails silently. Fixed with `w32tm /resync`.
 
-**VirusTotal returning inconsistent results**
-Free tier API rate limits. Was hitting the limit mid-scan. Added `sleep 15` between requests and it stabilized.
+**VirusTotal returning inconsistent results.** The free tier's rate limit was
+being hit mid-scan. Adding `sleep 15` between requests stabilized it.
 
----
+## What I took away
 
-## What I Actually Took Away From This
+The hardest part was not setting up individual tools. It was getting
+components on different networks — a cloud VM, a local VM, shared hosting —
+to talk to each other, and then working out why things were quiet when they
+should have been alerting.
 
-The hardest part wasn't setting up individual tools. It was getting components across different networks — cloud VM, local VM, shared hosting — to talk to each other, and then figuring out why things were quiet when they should have been alerting.
+The lesson that stuck: logs flowing into a SIEM does not mean detection is
+working. A perfectly healthy pipeline can produce zero alerts because the
+rules do not match. I only understood the difference between *pipeline
+health* and *detection coverage* by running this and being confused by it.
 
-The thing that stuck with me most: logs flowing into a SIEM doesn't mean detection is working. You can have a perfectly healthy pipeline and zero alerts because the rules don't match. Understanding the difference between "pipeline health" and "detection coverage" is something I only got from actually running this and being confused by it.
+## Status and limitations
 
----
+| Area | Status | Notes |
+|---|---|---|
+| The lab environment | Archived | Built early 2024; not maintained |
+| `configs/`, `scripts/` | Reconstructed | Rebuilt from memory, then checked against the Wazuh docs, the Wazuh GitHub ruleset and the Sysmon schema reference |
 
-## Repository Structure
+- **Reconstructed, not recovered.** I did not keep notes while building; I
+  was busy getting it to work. The documentation and the config files are
+  accurate to what I built, but they were rebuilt afterwards, not copied from
+  the running lab.
+- **Placeholders to adjust.** Hostnames (`dc.example.org`,
+  `wazuh.example.org`), paths and the VirusTotal API key must be replaced
+  for your environment.
+- **Not a production deployment.** One endpoint, one domain controller, one
+  Wazuh server.
 
-```
+## Repository layout
+
+```text
 active-directory-wazuh-homelab/
 ├── configs/
 │   ├── sysmon-config.xml          # Sysmon config — SwiftOnSecurity baseline, trimmed
@@ -250,32 +266,30 @@ active-directory-wazuh-homelab/
 └── README.md
 ```
 
-Start with `configs/wazuh-agent-ossec.conf` to see what gets collected, then `configs/wazuh-custom-rules.xml` for the detection logic.
+Start with `configs/wazuh-agent-ossec.conf` to see what gets collected, then
+`configs/wazuh-custom-rules.xml` for the detection logic.
 
----
+## Requirements to reproduce
 
-## Requirements to Reproduce
+| Requirement | Why |
+|---|---|
+| A cloud Windows Server VM (Azure free tier works) | Domain controller |
+| VirtualBox on a local machine | Windows 10 endpoint |
+| A Linux VPS | Wazuh manager |
+| A dynamic-DNS provider (Dynu is free) | Hostnames instead of static IPs |
+| A VirusTotal API key (free tier) | Hash lookups |
 
-- Azure free tier or any cloud Windows Server VM
-- VirtualBox on a local machine
-- Any Linux VPS for Wazuh
-- Dynu account for dynamic DNS (free)
+## AI disclosure
 
-Adjust `wazuh.mywire.org`, `mylab-local.mywire.org`, and the VirusTotal API key in the configs before deploying.
+I designed, built, configured and documented this lab without AI
+assistance. In September 2026 this README was restructured with an AI
+assistant to match my documentation standard; the technical content is
+unchanged, except that my lab's real hostnames were replaced with
+placeholders in the README, `configs/wazuh-agent-ossec.conf` and
+`scripts/log-forwarder.sh`.
 
----
+## Built with
 
-## Tech Stack
-
-`Wazuh` · `Active Directory` · `Azure` · `Windows Server` · `Sysmon` · `VirtualBox` · `Dynu DNS` · `VirusTotal API` · `Bash` · `Cron` · `SSH/SCP`
-
----
-
-## Author
-
-**Kunal Patil** — BSc Computer Science (Hons) · Cybersecurity  
-[LinkedIn](https://linkedin.com/in/kunal-patil-0b4713276) · [GitHub](https://github.com/Aakhri-Pastaa)
-
----
+Wazuh · Active Directory · Azure · Windows Server · Sysmon · VirtualBox · Dynu DNS · VirusTotal API · Bash · cron · SSH/SCP
 
 *Personal project, not affiliated with any vendor.*
